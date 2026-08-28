@@ -1,6 +1,9 @@
+
 # MIR Search Engine
 
-A full-stack academic information retrieval system that compares classical lexical retrieval, probabilistic ranking, dense semantic retrieval, hybrid fusion, pseudo relevance feedback, and grounded Retrieval-Augmented Generation (RAG) over a shared document corpus.
+A full-stack academic Information Retrieval system that compares classical lexical retrieval, probabilistic ranking, dense semantic retrieval, hybrid fusion, Pseudo Relevance Feedback, and grounded Retrieval-Augmented Generation (RAG) over a shared document corpus.
+
+Repository: https://github.com/AylaNasiri/mir-rag-search-engine
 
 ## Student Information
 
@@ -20,24 +23,27 @@ MIR Search Engine is a document search and question-answering application built 
 
 The system supports:
 
-- PDF document ingestion
-- DOCX document ingestion
-- Text extraction and chunking
+- Native PDF document ingestion
+- Native DOCX document ingestion
+- Text extraction and overlapping chunking
 - PostgreSQL document and chunk storage
-- Lexical inverted index
+- Classical lexical inverted index
 - TF-IDF / Vector Space Model (VSM)
 - Inexact Top-K optimization using Index Elimination
-- BM25 ranking
+- User-configurable Top-K retrieval depth
+- Okapi BM25 ranking
 - Dense semantic embeddings
 - PostgreSQL + pgvector vector storage
 - Semantic similarity search
 - Hybrid lexical + semantic retrieval
 - Pseudo Relevance Feedback (PRF) using the Rocchio method
 - Retrieval-Augmented Generation (RAG)
+- User-configurable RAG context Top-K
 - Inline source citations
 - RAG relevance / insufficient-context guard
 - Query-term highlighting for lexical results
-- Document upload, re-index, inspection, and deletion
+- Document upload, processing, re-indexing, inspection, and deletion
+- Synchronized lexical and vector index cleanup
 - React administration dashboard
 - Responsive search interface
 
@@ -52,27 +58,25 @@ flowchart TD
 
     API --> INGEST[Document Ingestion]
     INGEST --> PARSER[PDF / DOCX Parser]
-    PARSER --> CHUNK[Chunking]
+    PARSER --> CHUNK[Overlapping Chunking]
 
     CHUNK --> DB[(PostgreSQL)]
     CHUNK --> LEX[Lexical Inverted Index]
     CHUNK --> EMB[Sentence Transformer Embeddings]
 
-    EMB --> VDB[(pgvector)]
+    EMB --> VDB[(PostgreSQL + pgvector)]
 
     LEX --> VSM[VSM / TF-IDF]
     LEX --> BM25[BM25]
     VDB --> SEM[Semantic Search]
 
     VSM --> HYB[Hybrid Fusion]
-    BM25 --> HYB
     SEM --> HYB
 
     VSM --> PRF[PRF / Rocchio]
     PRF --> VSM
 
-    HYB --> CTX[RAG Context Builder]
-    SEM --> CTX
+    SEM --> CTX[RAG Top-K Context]
     CTX --> GUARD[Relevance Guard]
     GUARD --> LLM[Ollama / llama3.2:3b]
     LLM --> ANSWER[Grounded Answer + Citations]
@@ -84,7 +88,6 @@ flowchart TD
 ## Technology Stack
 
 ### Backend
-
 - Python
 - FastAPI
 - SQLAlchemy
@@ -100,7 +103,6 @@ flowchart TD
 - pytest
 
 ### Frontend
-
 - React 19
 - Vite 8
 - React Router
@@ -109,11 +111,12 @@ flowchart TD
 - ESLint
 
 ### RAG / Local AI
-
 - Ollama
 - `llama3.2:3b`
 - `sentence-transformers/all-MiniLM-L6-v2`
 - Embedding dimension: `384`
+
+No external paid LLM API key is required because answer generation runs through a local Ollama model.
 
 ---
 
@@ -121,21 +124,25 @@ flowchart TD
 
 ### 1. VSM / TF-IDF
 
-The Vector Space Model represents queries and documents using TF-IDF weighted term vectors.
+The Vector Space Model represents queries and documents using TF-IDF weighted term vectors. Documents are ranked using cosine similarity.
 
-Documents are ranked using cosine similarity between the query vector and document/chunk vectors.
+The implementation includes **Inexact Top-K retrieval using Index Elimination**. High-IDF query terms reduce the candidate set before full TF-IDF cosine scoring.
 
-The implementation also includes an Inexact Top-K optimization based on **Index Elimination**. High-IDF query terms are used to reduce the candidate set before full scoring.
+This optimization is different from the user-selected result count:
+
+- **Top-K Results** controls how many ranked results are returned to the interface.
+- **Index Elimination** reduces how many candidate documents require full scoring.
+
+For VSM, BM25, Semantic, and Hybrid search, the frontend provides:
+
+```text
+Top-K = 5 | 10 | 15 | 20
+Default = 10
+```
 
 ### 2. BM25
 
-BM25 provides probabilistic lexical ranking using:
-
-- term frequency
-- inverse document frequency
-- document length normalization
-
-It is useful for exact terminology, identifiers, and keyword-heavy queries.
+The project implements Okapi BM25 probabilistic lexical ranking using term frequency, inverse document frequency, and document length normalization.
 
 ### 3. Semantic Search
 
@@ -151,66 +158,60 @@ Each vector has:
 384 dimensions
 ```
 
-Vectors are stored in PostgreSQL with the `pgvector` extension.
-
-Incoming queries are embedded with the same model and compared to document vectors using vector similarity.
+Vectors are stored in PostgreSQL using the `pgvector` extension.
 
 ### 4. Hybrid Search
 
-Hybrid retrieval combines lexical evidence with semantic evidence.
-
-This allows:
-
-- exact keyword matches to remain important
-- semantically related documents to surface even when wording differs
+Hybrid retrieval combines lexical and semantic evidence so exact matches remain important while semantically related documents can still surface.
 
 ### 5. Pseudo Relevance Feedback
 
-The VSM pipeline supports Pseudo Relevance Feedback using the Rocchio method.
+The VSM pipeline supports Pseudo Relevance Feedback using the Rocchio method:
 
-Process:
-
-1. Execute the initial VSM search.
-2. Treat the top retrieved chunks as pseudo-relevant documents.
-3. Build a TF-IDF centroid from those chunks.
+1. Run the initial VSM search.
+2. Treat the top retrieved chunks as pseudo-relevant.
+3. Build a TF-IDF centroid.
 4. Select expansion terms.
-5. Expand the original query.
-6. Execute a second VSM retrieval.
+5. Expand the query.
+6. Run a second VSM retrieval.
 
-The frontend displays:
-
-- original query
-- expanded query
-- expansion terms
-- PRF application status
+The frontend displays the original query, expanded query, expansion terms, and PRF status.
 
 ### 6. Retrieval-Augmented Generation
 
-RAG uses retrieved chunks as the only evidence for answer generation.
+RAG uses dense semantic retrieval to obtain evidence chunks before generation.
 
 The system:
 
-1. retrieves relevant chunks
-2. builds an evidence context
-3. checks whether the retrieved context is sufficiently relevant
-4. sends the grounded context to the local LLM
-5. returns an answer with inline citations such as:
+1. embeds the user query
+2. retrieves the Top-K semantically relevant chunks
+3. builds a grounded evidence context
+4. checks whether the context is sufficiently relevant
+5. sends the context to the local Ollama LLM
+6. returns an answer with inline source citations
+
+The frontend exposes:
+
+```text
+RAG Context Top-K = 3 | 5 | 7
+Default = 3
+```
+
+Example grounded answer:
 
 ```text
 384 dimensions. [Source 1]
 ```
 
-If the corpus does not contain sufficient information, the system returns:
+If the corpus does not contain sufficient information:
 
 ```text
 I could not find enough information in the provided documents.
 ```
 
-instead of inventing an answer.
-
 ---
 
-## Document Processing Pipeline
+## Document Processing and Synchronization
 
 ```text
 Upload
@@ -221,7 +222,7 @@ File storage
   ↓
 PDF / DOCX text extraction
   ↓
-Chunking
+Overlapping chunking
   ↓
 Lexical index creation
   ↓
@@ -241,6 +242,10 @@ Chunk size:     500 words
 Chunk overlap:   50 words
 ```
 
+When a document is deleted, its document data, chunks, lexical index data, and vector data are removed so the content no longer appears in search results.
+
+Re-indexing replaces stale indexed data instead of appending duplicate chunks.
+
 ---
 
 ## Project Structure
@@ -256,13 +261,8 @@ mir-rag-search-engine/
 │   │   │       ├── health.py
 │   │   │       ├── rag.py
 │   │   │       └── search.py
-│   │   │
 │   │   ├── core/
-│   │   │   └── config.py
-│   │   │
 │   │   ├── db/
-│   │   │   └── database.py
-│   │   │
 │   │   ├── models/
 │   │   ├── retrieval/
 │   │   │   ├── bm25.py
@@ -272,25 +272,12 @@ mir-rag-search-engine/
 │   │   │   ├── semantic.py
 │   │   │   ├── tokenizer.py
 │   │   │   └── vsm.py
-│   │   │
 │   │   ├── schemas/
 │   │   ├── services/
-│   │   │   ├── chunk_service.py
-│   │   │   ├── embedding_service.py
-│   │   │   ├── generation_service.py
-│   │   │   ├── indexing_service.py
-│   │   │   ├── parser_service.py
-│   │   │   ├── rag_context_service.py
-│   │   │   ├── rag_guard_service.py
-│   │   │   ├── rag_prompt_service.py
-│   │   │   └── rag_service.py
-│   │   │
 │   │   └── main.py
-│   │
 │   ├── migrations/
 │   ├── scripts/
 │   ├── storage/
-│   │   └── uploads/
 │   ├── tests/
 │   ├── .env.example
 │   ├── alembic.ini
@@ -302,8 +289,6 @@ mir-rag-search-engine/
 │   ├── src/
 │   │   ├── api/
 │   │   ├── components/
-│   │   │   ├── admin/
-│   │   │   └── search/
 │   │   ├── layouts/
 │   │   ├── pages/
 │   │   │   ├── Dashboard.jsx
@@ -311,7 +296,6 @@ mir-rag-search-engine/
 │   │   ├── App.jsx
 │   │   ├── index.css
 │   │   └── main.jsx
-│   │
 │   ├── package.json
 │   └── vite.config.js
 │
@@ -323,79 +307,60 @@ mir-rag-search-engine/
 
 ## Prerequisites
 
-Install the following before running the project:
-
 - Python 3.11+ recommended
 - Node.js
 - npm
 - PostgreSQL
 - pgvector PostgreSQL extension
 - Ollama
+- Git
 
 ---
 
-# Backend Setup
+# Installation and Setup
 
-## 1. Open the Backend Directory
+## 1. Clone the Repository
+
+```powershell
+git clone https://github.com/AylaNasiri/mir-rag-search-engine.git
+cd mir-rag-search-engine
+```
+
+## 2. Backend Setup
 
 ```powershell
 cd backend
-```
-
-## 2. Create a Virtual Environment
-
-```powershell
 python -m venv .venv
-```
-
-Activate it:
-
-```powershell
 .\.venv\Scripts\Activate.ps1
-```
-
-## 3. Install Dependencies
-
-```powershell
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
----
+All backend commands should be run from the `backend` directory because the application loads its `.env` configuration from there.
 
-## 4. Configure PostgreSQL
+## 3. PostgreSQL Setup
 
-Create a PostgreSQL database for the project.
-
-Example:
+Create the database:
 
 ```sql
 CREATE DATABASE mir_search_engine;
 ```
 
-Connect to the database and enable pgvector:
+Connect to it and enable pgvector:
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS vector;
 ```
 
----
+## 4. Environment Variables
 
-## 5. Configure Environment Variables
+From the `backend` directory:
 
-Copy:
-
-```text
-backend/.env.example
+```powershell
+Copy-Item .env.example .env
 ```
 
-to:
-
-```text
-backend/.env
-```
-
-Example:
+Edit `.env`:
 
 ```env
 DB_HOST=localhost
@@ -405,28 +370,26 @@ DB_USER=postgres
 DB_PASSWORD=your_password
 ```
 
-The real `.env` file must not be committed to Git.
+Never commit the real `.env` file.
 
----
-
-## 6. Run Database Migrations
-
-From the `backend` directory:
+## 5. Database Migrations
 
 ```powershell
 alembic upgrade head
 ```
 
----
-
-## 7. Prepare Ollama
-
-Make sure Ollama is installed and running.
+## 6. Ollama
 
 Pull the model:
 
 ```powershell
 ollama pull llama3.2:3b
+```
+
+If Ollama is not already running as a service:
+
+```powershell
+ollama serve
 ```
 
 Verify:
@@ -435,11 +398,9 @@ Verify:
 ollama list
 ```
 
-The application uses a local Ollama model for grounded answer generation.
+No external LLM API key is required.
 
----
-
-## 8. Start the Backend
+## 7. Start the Backend
 
 ```powershell
 python -m uvicorn app.main:app --reload
@@ -451,7 +412,7 @@ Backend:
 http://127.0.0.1:8000
 ```
 
-FastAPI documentation:
+FastAPI docs:
 
 ```text
 http://127.0.0.1:8000/docs
@@ -467,21 +428,11 @@ API prefix:
 
 # Frontend Setup
 
-Open a second terminal.
+Open a second terminal from the repository root:
 
 ```powershell
 cd frontend
-```
-
-Install dependencies:
-
-```powershell
 npm install
-```
-
-Run development server:
-
-```powershell
 npm run dev
 ```
 
@@ -497,27 +448,49 @@ http://localhost:5173
 
 ### Search
 
+Route:
+
 ```text
 /
 ```
 
-The Search page allows the user to choose between:
+Available strategies:
 
 - VSM
 - BM25
-- Semantic Search
-- Hybrid Search
+- Semantic
+- Hybrid
 - Ask AI / RAG
 
-VSM also exposes the optional PRF toggle.
+For VSM, BM25, Semantic, and Hybrid:
+
+```text
+Top-K = 5, 10, 15, or 20
+```
+
+When VSM is selected, the interface also identifies:
+
+```text
+Inexact Top-K Optimization: Index Elimination
+```
+
+VSM additionally exposes the PRF toggle.
+
+For Ask AI / RAG:
+
+```text
+RAG Context Top-K = 3, 5, or 7
+```
 
 ### Admin Dashboard
+
+Route:
 
 ```text
 /dashboard
 ```
 
-The dashboard supports:
+Supports:
 
 - upload PDF / DOCX
 - process and index documents
@@ -525,7 +498,7 @@ The dashboard supports:
 - inspect document metadata
 - inspect chunks
 - verify embedding readiness
-- delete documents and indexed data
+- delete documents and synchronized indexed data
 
 ---
 
@@ -533,27 +506,24 @@ The dashboard supports:
 
 ### Backend
 
-Activate the backend environment and run:
+From `backend` with the virtual environment active:
 
 ```powershell
 python -m pytest -q
 ```
 
-Final project verification:
+Final verified result:
 
 ```text
 10 passed
 ```
 
-### Frontend Lint
+### Frontend
+
+From `frontend`:
 
 ```powershell
 npm run lint
-```
-
-### Frontend Production Build
-
-```powershell
 npm run build
 ```
 
@@ -561,24 +531,25 @@ npm run build
 
 ## Acceptance Tests
 
-The final project was manually validated for the following workflows:
-
 | Feature | Status |
 |---|---|
 | PDF parsing | ✅ |
 | DOCX parsing | ✅ |
-| Chunking | ✅ |
+| Overlapping chunking | ✅ |
+| PostgreSQL storage | ✅ |
 | Inverted index | ✅ |
 | VSM / TF-IDF | ✅ |
 | Index Elimination / Inexact Top-K | ✅ |
+| User-configurable Search Top-K | ✅ |
 | BM25 | ✅ |
-| Embeddings | ✅ |
+| 384-dimensional embeddings | ✅ |
 | pgvector storage | ✅ |
 | Semantic Search | ✅ |
 | Hybrid Search | ✅ |
 | PRF / Rocchio | ✅ |
 | Query highlighting | ✅ |
 | RAG | ✅ |
+| User-configurable RAG Context Top-K | ✅ |
 | Inline citations | ✅ |
 | Relevance guard | ✅ |
 | Upload | ✅ |
@@ -600,15 +571,11 @@ The final project was manually validated for the following workflows:
 VECTOR-ALPHA-731
 ```
 
-Useful for validating VSM and BM25.
-
 ### Semantic Retrieval
 
 ```text
 How are dense vectors stored in PostgreSQL?
 ```
-
-Useful for validating embedding-based retrieval.
 
 ### Hybrid Search
 
@@ -616,15 +583,11 @@ Useful for validating embedding-based retrieval.
 What is hybrid search?
 ```
 
-Useful for validating lexical + semantic fusion.
-
 ### PRF
 
 ```text
 semantic retrieval
 ```
-
-Enable Pseudo Relevance Feedback and verify that the expanded query differs from the original query.
 
 ### Positive RAG Test
 
@@ -632,7 +595,7 @@ Enable Pseudo Relevance Feedback and verify that the expanded query differs from
 How many dimensions are used in this test?
 ```
 
-Expected grounded answer:
+Expected:
 
 ```text
 384 dimensions. [Source 1]
@@ -644,7 +607,7 @@ Expected grounded answer:
 What is the population of Mars?
 ```
 
-Expected behavior:
+Expected:
 
 ```text
 I could not find enough information in the provided documents.
@@ -652,11 +615,53 @@ I could not find enough information in the provided documents.
 
 ---
 
+## Top-K Verification
+
+### Search Top-K
+
+VSM, BM25, Semantic, and Hybrid support:
+
+```text
+K = 5, 10, 15, 20
+```
+
+Selecting `K = 5` limits the interface to a maximum of five ranked retrieval results.
+
+### VSM Inexact Top-K
+
+VSM performs Index Elimination before final scoring:
+
+```text
+Query
+  ↓
+High-IDF query terms
+  ↓
+Reduced candidate set
+  ↓
+TF-IDF cosine scoring
+  ↓
+Top-K ranked results
+```
+
+This demonstrates that **Inexact Top-K optimization** and **user-selected result depth** are separate concepts.
+
+### RAG Context Top-K
+
+Ask AI / RAG supports:
+
+```text
+K = 3, 5, 7
+```
+
+Selecting `RAG Context Top-K = 3` retrieves at most three evidence chunks for the grounded generation context.
+
+---
+
 ## Re-index Behavior
 
 Re-indexing replaces stale indexed data rather than appending duplicate chunks.
 
-During final verification, a document with:
+A verified test document with:
 
 ```text
 2 chunks
@@ -676,15 +681,30 @@ after re-indexing.
 
 ## Delete Behavior
 
-Deleting a document removes it from the corpus and its searchable indexed data.
-
-This was validated by:
+Deletion was validated by:
 
 1. searching for a unique identifier
 2. confirming the document was retrieved
 3. deleting the document
 4. searching for the same identifier again
 5. confirming that no result was returned
+
+---
+
+## Video Demonstration Checklist
+
+The final 5-7 minute demonstration should show:
+
+1. Upload a new PDF or DOCX.
+2. Process/index it.
+3. Query content from the uploaded document.
+4. Delete the document.
+5. Run the same query again and prove the document no longer appears.
+6. Run an identical query through VSM, BM25, and Ask AI / RAG.
+7. Show configurable Top-K.
+8. Show VSM Index Elimination.
+9. Show PRF query expansion.
+10. Show a grounded RAG answer with citations.
 
 ---
 
@@ -707,7 +727,7 @@ Use `.env.example` to document required environment variables.
 
 This project was created as an academic implementation of modern Information Retrieval concepts, combining classical retrieval techniques with neural semantic search and grounded RAG.
 
-The focus is not only on answer generation, but on exposing and comparing the retrieval behavior behind the generated answer.
+The focus is not only on answer generation, but also on exposing and comparing the retrieval behavior behind the generated answer.
 
 ---
 
