@@ -27,6 +27,21 @@ const methodNames = {
 }
 
 
+const SEARCH_TOP_K_OPTIONS = [
+  5,
+  10,
+  15,
+  20,
+]
+
+
+const RAG_TOP_K_OPTIONS = [
+  3,
+  5,
+  7,
+]
+
+
 function IdentityCard({
   label,
   value,
@@ -50,6 +65,125 @@ function IdentityCard({
         {value}
       </p>
     </div>
+  )
+}
+
+
+function TopKSettings({
+  algorithm,
+  topK,
+  onTopKChange,
+  ragTopK,
+  onRagTopKChange,
+}) {
+  const isRag =
+    algorithm === "rag"
+
+  const options =
+    isRag
+      ? RAG_TOP_K_OPTIONS
+      : SEARCH_TOP_K_OPTIONS
+
+  const selectedValue =
+    isRag
+      ? ragTopK
+      : topK
+
+  const handleChange =
+    isRag
+      ? onRagTopKChange
+      : onTopKChange
+
+
+  return (
+    <section className="topk-panel">
+      <div className="topk-main">
+        <div>
+          <p className="app-label">
+            {isRag
+              ? "RAG Context Top-K"
+              : "Top-K Results"}
+          </p>
+
+          <p className="topk-title">
+            {isRag
+              ? "Retrieved Chunks"
+              : "Retrieval Depth"}
+          </p>
+
+          <p className="topk-copy">
+            {isRag
+              ? "Choose how many retrieved chunks are passed to the grounded RAG context."
+              : "Choose the maximum number of ranked search results returned to the interface."}
+          </p>
+        </div>
+
+        <div className="topk-controls">
+          <div
+            className="topk-options"
+            role="group"
+            aria-label={
+              isRag
+                ? "RAG context Top-K"
+                : "Search Top-K"
+            }
+          >
+            {options.map(
+              (option) => (
+                <button
+                  key={option}
+                  type="button"
+                  onClick={() =>
+                    handleChange(option)
+                  }
+                  className={
+                    `topk-option ${
+                      selectedValue === option
+                        ? "active"
+                        : ""
+                    }`
+                  }
+                  aria-pressed={
+                    selectedValue === option
+                  }
+                >
+                  {option}
+                </button>
+              )
+            )}
+          </div>
+
+          <div className="topk-selected">
+            <span>Selected</span>
+            <strong>
+              K = {selectedValue}
+            </strong>
+          </div>
+        </div>
+      </div>
+
+      {algorithm === "vsm" && (
+        <div className="topk-optimization">
+          <div className="topk-optimization-icon">
+            IE
+          </div>
+
+          <div>
+            <p className="topk-optimization-label">
+              Inexact Top-K Optimization
+            </p>
+
+            <p className="topk-optimization-value">
+              Index Elimination
+            </p>
+
+            <p className="topk-optimization-copy">
+              High-IDF query terms reduce the candidate set before final TF-IDF cosine scoring.
+            </p>
+          </div>
+        </div>
+      )}
+    </section>
   )
 }
 
@@ -100,6 +234,16 @@ function Search() {
     setError,
   ] = useState("")
 
+  const [
+    topK,
+    setTopK,
+  ] = useState(10)
+
+  const [
+    ragTopK,
+    setRagTopK,
+  ] = useState(3)
+
 
   async function handleSearch(
     event
@@ -131,7 +275,7 @@ function Search() {
         const data =
           await askRag({
             query: normalizedQuery,
-            limit: 3,
+            limit: ragTopK,
           })
 
         setRagResult(data)
@@ -143,7 +287,7 @@ function Search() {
         await searchDocuments({
           query: normalizedQuery,
           mode: algorithm,
-          limit: 10,
+          limit: topK,
           prf:
             algorithm === "vsm"
             && prfEnabled,
@@ -339,6 +483,14 @@ function Search() {
             <p className="active-pipeline-value">
               {methodNames[algorithm]}
             </p>
+
+            <p className="active-pipeline-k">
+              Top-K: {
+                algorithm === "rag"
+                  ? ragTopK
+                  : topK
+              }
+            </p>
           </div>
         </div>
 
@@ -358,6 +510,14 @@ function Search() {
             onChange={
               handleAlgorithmChange
             }
+          />
+
+          <TopKSettings
+            algorithm={algorithm}
+            topK={topK}
+            onTopKChange={setTopK}
+            ragTopK={ragTopK}
+            onRagTopKChange={setRagTopK}
           />
 
           {algorithm === "vsm" && (
@@ -486,9 +646,15 @@ function Search() {
                 </h2>
               </div>
 
-              <span className="meta-pill">
-                {results.length} results
-              </span>
+              <div className="result-meta" style={{ marginTop: 0 }}>
+                <span className="meta-pill">
+                  Top-K {topK}
+                </span>
+
+                <span className="meta-pill">
+                  {results.length} results
+                </span>
+              </div>
             </div>
 
             <div className="results-stack">
